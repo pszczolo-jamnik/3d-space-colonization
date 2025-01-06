@@ -13,19 +13,16 @@ from collections import defaultdict
 import plyfile
 import argparse
 
+from opensimplex import OpenSimplex
+
 parser = argparse.ArgumentParser()
-parser.add_argument("--attraction-distance", help="", type=float, required=True)
-parser.add_argument("--kill-distance", help="", type=float, required=True)
-parser.add_argument("--segment-length", help="", type=float, required=True)
+parser.add_argument("--attraction_distance", help="", type=float, required=True)
+parser.add_argument("--kill_distance", type=float, required=True)
+parser.add_argument("--segment_length", type=float, required=True)
+parser.add_argument("--iterations", type=int, required=True)
+parser.add_argument("--file_in", required=True)
+parser.add_argument("--dir_out", required=True)
 args = parser.parse_args()
-
-n_attractors = 10000
-attraction_distance = 3.0
-kill_distance = 0.5
-step = 0.1
-
-BIG_NUMBER = n_attractors * 10
-INF = float('inf')
 
 def plot_3d(points):
 
@@ -44,6 +41,7 @@ def plot_3d(points):
 def grow(nodes, attractors, node_attractors_list, nodes_len, step):
     output = np.zeros_like(nodes)
     output_normals = np.zeros_like(nodes)
+    output_parent = np.full((nodes.shape[0],), INT_MAX, dtype=int)
 
     for i in prange(nodes_len):
         node = nodes[i]
@@ -62,23 +60,36 @@ def grow(nodes, attractors, node_attractors_list, nodes_len, step):
             average_direction = np.sum(direction_vectors, axis=0) / n
             average_direction /= np.linalg.norm(average_direction)
 
+            # might experiment with how far it grows
             output[i] = node + average_direction * step
             output_normals[i] = average_direction
+            output_parent[i] = i
 
-    return (output, output_normals)
+    return (output, output_normals, output_parent)
 
-def write_xyz_to_ply(nodes, normals, age, output_filepath):
-    nodes = np.hstack((nodes, normals, age[:, np.newaxis]))
+def write_ply(nodes, normals, thickness, output_filepath):
+    nodes = np.hstack((nodes, normals, thickness[:, np.newaxis]))
 
     vertex = np.array([(n[0], n[1], n[2],
                         n[3], n[4], n[5],
                         n[6]) for n in nodes],
                         dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
                                ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
-                               ('age', 'f4')])
+                               ('thickness', 'f4')])
 
     el = plyfile.PlyElement.describe(vertex, 'vertex')
     plyfile.PlyData([el]).write(output_filepath)
+
+def read_ply(filename):
+    plydata = plyfile.PlyData.read(filename)
+    vertex_data = plydata['vertex']
+
+    vertices = np.vstack([
+        vertex_data['x'],
+        vertex_data['y'],
+        vertex_data['z']
+    ]).T
+    return vertices
 
 def random_sphere_points(n, r=1):
     theta = np.random.uniform(0, 2 * np.pi, n)  # Azimuthal angle
@@ -88,17 +99,46 @@ def random_sphere_points(n, r=1):
     z = r * np.cos(phi)
     return np.vstack((x, y, z)).T
 
+def noise_probability(attractors, noise_grid, noise_start, noise_size):
+    simplex = OpenSimplex(seed=2)
 
-# attractors = np.random.uniform(0.0, 20.0, (n_attractors, 3))
-attractors = random_sphere_points(5000, 10)
-nodes = random_sphere_points(15, 12)
+    noise_res = noise_size / noise_grid
 
-normals = np.ones_like(nodes)
+    noise_xyz = np.arange(noise_start, noise_start + noise_size, noise_res)
 
-age = np.zeros((nodes.shape[0],))
+    noise = simplex.noise3array(noise_xyz, noise_xyz, noise_xyz)
 
-# nodes = np.zeros((1, 3))
-# nodes[0] = (8, 8, 8)
+    # normalize
+    noise = (noise - np.min(noise)) / (np.max(noise) - np.min(noise))
+
+    # grid
+    attractor_indices = np.floor(attractors * noise_grid).astype(int)
+    attractor_indices = np.clip(attractor_indices, 0, noise_grid-1)
+
+    attractor_counts = np.zeros_like(noise)
+    np.add.at(attractor_counts, (attractor_indices[:, 0],
+                                attractor_indices[:, 1],
+                                attractor_indices[:, 2]), 1)
+
+    target_counts = np.round((noise / noise.sum()) * len(attractors)).astype(int)
+
+    # Generate new points
+    attractors_new = []
+    n = noise_grid
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                num_points = target_counts[i, j, k]
+                if num_points > 0:
+                    # Generate random points within the cell
+                    cell_points = np.random.uniform(
+                        low=[i/n, j/n, k/n],
+                        high=[(i+1)/n, (j+1)/n, (k+1)/n],
+                        size=(num_points, 3)
+                    )
+                    attractors_new.append(cell_points)
+
+    return np.vstack(attractors_new)
 
 def update(nodes, normals, attractors):
     node_tree = KDTree(nodes)
@@ -126,28 +166,99 @@ def update(nodes, normals, attractors):
 
     node_attractors_list = np.array(node_attractors_list)
 
-    (new_nodes, new_normals) = grow(nodes, attractors, node_attractors_list, nodes_len, step)
+    (new_nodes, new_normals, new_parent) = grow(nodes,
+                                                attractors,
+                                                node_attractors_list,
+                                                nodes_len,
+                                                step)
+
+    new_parent = new_parent.astype(int)
 
     new_nodes = new_nodes[~np.all(new_nodes == 0, axis=1)]
     new_normals = new_normals[~np.all(new_normals == 0, axis=1)]
-
+    new_parent = new_parent[new_parent != INT_MAX]
     new_count = new_nodes.shape[0]
 
     return (np.concatenate((nodes, new_nodes)),
             np.concatenate((normals, new_normals)),
             attractors,
+            new_parent,
             new_count)
 
-iterations = 100
+
+n_attractors = 40000
+attraction_distance = args.attraction_distance
+kill_distance = args.kill_distance
+step = args.segment_length
+
+BIG_NUMBER = n_attractors * 10
+INF = float('inf')
+INT_MAX = np.iinfo(int).max
+
+# attractors = random_sphere_points(5000, 10)
+# nodes = random_sphere_points(15, 12)
+
+attractors = read_ply(args.file_in)
+
+nodes = attractors[np.argmin(attractors[:, 2])]
+
+nodes = nodes[np.newaxis, :]
+
+normals = np.ones_like(nodes)
+
+age = np.zeros((nodes.shape[0],))
+
+parent = np.full((nodes.shape[0],), INT_MAX, dtype=int)
+
+iterations = args.iterations
 
 for cycle in range(iterations):
-    (nodes, normals, attractors, new_count) = update(nodes, normals, attractors)
-    age = np.concatenate((age, np.tile((cycle + 1) / iterations, new_count)))
+    (nodes,
+     normals,
+     attractors,
+     new_parent,
+     new_count) = update(nodes, normals, attractors)
 
-    print(f"nodes {nodes.shape[0]}")
-    print(f"attractors {attractors.shape[0]}")
+    age = np.concatenate((age, np.tile(cycle, new_count)))
 
-write_xyz_to_ply(nodes, normals, age, "tree.ply")
+    parent = np.concatenate((parent, new_parent))
+
+    print(f"nodes {nodes.shape[0]}; attractors {attractors.shape[0]}", end="\r")
+
+has_children = np.full((nodes.shape[0],), False)
+
+for i in parent:
+    if i != INT_MAX:
+        has_children[int(i)] = True
+
+min_thickness = 0.001
+max_thickness = 0.1
+thickness_a = 0.05
+thickness_b = 0.02
+
+thickness = np.full((nodes.shape[0],), min_thickness)
+
+idx = np.where(has_children == False)[0]
+
+for i in idx:
+    node = i
+    while parent[node] != INT_MAX:
+        node_thickness = thickness[node]
+        parent_thickness = thickness[parent[node]]
+
+        if (parent_thickness < (node_thickness + thickness_a)):
+            thickness[parent[node]] = node_thickness + thickness_b
+            # print(f"node {parent[node]}: {thickness[parent[node]]}")
+        node = parent[node]
+
+# export frame by frame
+for i in range(iterations):
+    nodes_frame = np.zeros_like(nodes)
+    idx = np.where(age <= i)[0]
+    nodes_select = nodes[idx]
+    nodes_frame[:nodes_select.shape[0]] = nodes_select
+    # folder dir_out must exist
+    write_ply(nodes_frame, normals, thickness, args.dir_out + f"/{i}.ply")
 
 # plot_3d(nodes)
 # plot_3d(normals)
