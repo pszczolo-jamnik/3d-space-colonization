@@ -1,0 +1,10 @@
+[package]
+name = "space-colonization"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.23", features = ["derive"] }
+kdtree = "0.7.0"
+num-traits = "0.2.19"
+ply-rs-bw = "2.0.1"
