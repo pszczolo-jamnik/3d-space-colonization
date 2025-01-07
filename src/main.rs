@@ -1,14 +1,17 @@
-extern crate ply_rs_bw;
+extern crate clap;
 extern crate kdtree;
 extern crate num_traits;
-extern crate clap;
+extern crate ply_rs_bw;
 
 use clap::Parser;
 
-use ply_rs_bw::ply;
 use ply_rs_bw::parser;
+use ply_rs_bw::ply;
 
-use ply_rs_bw::ply::{ Ply, DefaultElement, Encoding, ElementDef, PropertyDef, PropertyType, ScalarType, Property, Addable };
+use ply_rs_bw::ply::{
+    Addable, DefaultElement, ElementDef, Encoding, Ply, Property, PropertyDef, PropertyType,
+    ScalarType,
+};
 use ply_rs_bw::writer::Writer;
 
 use kdtree::KdTree;
@@ -23,13 +26,12 @@ struct Args {
     file_out: String,
 }
 
-#[derive(Debug)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct Point(f32, f32, f32);
 
 impl Point {
     fn to_array(&self) -> [f32; 3] {
-        [self.0, self.1 ,self.2]
+        [self.0, self.1, self.2]
     }
 }
 
@@ -48,7 +50,6 @@ impl ply::PropertyAccess for Point {
     }
 }
 
-
 fn read_ply(file_name: &str) -> Vec<Point> {
     let f = std::fs::File::open(file_name).unwrap();
     let mut f = std::io::BufReader::new(f);
@@ -62,8 +63,10 @@ fn read_ply(file_name: &str) -> Vec<Point> {
     for (_ignore_key, element) in &header.elements {
         match element.name.as_ref() {
             "vertex" => {
-                point_list = point_parser.read_payload_for_element(&mut f, &element, &header).unwrap();
-            },
+                point_list = point_parser
+                    .read_payload_for_element(&mut f, &element, &header)
+                    .unwrap();
+            }
             _ => panic!("Unexpected element!"),
         }
     }
@@ -71,7 +74,6 @@ fn read_ply(file_name: &str) -> Vec<Point> {
 }
 
 fn write_ply(file_name: &str, points_in: Vec<&Point>) {
-
     let mut buf = std::fs::File::create(file_name).unwrap();
 
     let mut ply = {
@@ -109,7 +111,6 @@ fn write_ply(file_name: &str, points_in: Vec<&Point>) {
     println!("{} bytes written", written);
 }
 
-
 fn euclidean<T: num_traits::Float>(a: &[T], b: &[T]) -> T {
     debug_assert_eq!(a.len(), b.len());
     a.iter()
@@ -130,7 +131,10 @@ fn main() {
     let mut attractors = read_ply(&args.file_in);
 
     // mother node (min Z)
-    let nodes = attractors.iter().min_by(|x, y| x.2.total_cmp(&y.2)).unwrap();
+    let nodes = attractors
+        .iter()
+        .min_by(|x, y| x.2.total_cmp(&y.2))
+        .unwrap();
     let mut nodes = vec![nodes.clone()];
     println!("starting from {:?}", nodes);
 
@@ -141,38 +145,34 @@ fn main() {
     kdtree.add(nodes[0].to_array(), 2).unwrap();
 
     let mut attractor_nodes: Vec<Option<&u32>> = attractors
-                                                .iter()
-                                                .map(|a| {
-                                                    let nearest = kdtree.nearest(&a.to_array(), 1, &euclidean).unwrap();
-                                                    assert_eq!(nearest.len(), 1);
-                                                    if nearest[0].0 <= ATTRACTION_DISTANCE {
-                                                        Some(nearest[0].1)
-                                                    } else {
-                                                        None
-                                                    }
-                                                })
-                                                .collect();
+        .iter()
+        .map(|a| {
+            let nearest = kdtree.nearest(&a.to_array(), 1, &euclidean).unwrap();
+            assert_eq!(nearest.len(), 1);
+            if nearest[0].0 <= ATTRACTION_DISTANCE {
+                Some(nearest[0].1)
+            } else {
+                None
+            }
+        })
+        .collect();
 
     for (i, node) in nodes.iter().enumerate() {
         let node_attractors: Vec<usize> = attractor_nodes
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, &value)|
-                                            match value {
-                                                None => None,
-                                                Some(val) if *val == (i as u32) => Some(index),
-                                                _ => None
-                                            })
-                            .collect();
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &value)| match value {
+                None => None,
+                Some(val) if *val == (i as u32) => Some(index),
+                _ => None,
+            })
+            .collect();
         // println!("{:?}", node_attractors);
         if !node_attractors.is_empty() {
             // ! spawn thread
-            let node_attractors: Vec<&Point> = node_attractors
-                                    .iter()
-                                    .map(|&i| &attractors[i])
-                                    .collect();
+            let node_attractors: Vec<&Point> =
+                node_attractors.iter().map(|&i| &attractors[i]).collect();
             write_ply(&args.file_out, node_attractors);
         }
     }
-
 }
