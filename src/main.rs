@@ -3,19 +3,12 @@ extern crate kdtree;
 extern crate num_traits;
 extern crate ply_rs_bw;
 
+mod ply_utils;
+
 use clap::Parser;
-
-use ply_rs_bw::parser;
-use ply_rs_bw::ply;
-
-use ply_rs_bw::ply::{
-    Addable, DefaultElement, ElementDef, Encoding, Ply, Property, PropertyDef, PropertyType,
-    ScalarType,
-};
-use ply_rs_bw::writer::Writer;
-
 use kdtree::KdTree;
 // use kdtree::ErrorKind;
+use std::ops::Sub;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -26,89 +19,33 @@ struct Args {
     file_out: String,
 }
 
-#[derive(Debug, Clone)]
-struct Point(f32, f32, f32);
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct Vec3(f32, f32, f32);
 
-impl Point {
+impl Vec3 {
     fn to_array(&self) -> [f32; 3] {
         [self.0, self.1, self.2]
     }
-}
 
-impl ply::PropertyAccess for Point {
-    fn new() -> Self {
-        Point(0.0, 0.0, 0.0)
+    fn norm(&self) -> f32 {
+        (self.0.powi(2) + self.1.powi(2) + self.2.powi(2)).sqrt()
     }
-    fn set_property(&mut self, key: &String, property: ply::Property) {
-        match (key.as_ref(), property) {
-            ("x", ply::Property::Float(v)) => self.0 = v,
-            ("y", ply::Property::Float(v)) => self.1 = v,
-            ("z", ply::Property::Float(v)) => self.2 = v,
-            // (k, _) => panic!("Point: Unexpected key/value combination: key: {}", k),
-            (_, _) => {}
-        }
+
+    fn normalize(&self) -> Self {
+        Self(
+            self.0 / self.norm(),
+            self.1 / self.norm(),
+            self.2 / self.norm(),
+        )
     }
 }
 
-fn read_ply(file_name: &str) -> Vec<Point> {
-    let f = std::fs::File::open(file_name).unwrap();
-    let mut f = std::io::BufReader::new(f);
+impl Sub for Vec3 {
+    type Output = Self;
 
-    let point_parser = parser::Parser::<Point>::new();
-
-    let header = point_parser.read_header(&mut f).unwrap();
-
-    let mut point_list = Vec::new();
-
-    for (_ignore_key, element) in &header.elements {
-        match element.name.as_ref() {
-            "vertex" => {
-                point_list = point_parser
-                    .read_payload_for_element(&mut f, &element, &header)
-                    .unwrap();
-            }
-            _ => panic!("Unexpected element!"),
-        }
+    fn sub(self, other: Self) -> Self::Output {
+        Self(self.0 - other.0, self.1 - other.1, self.2 - other.2)
     }
-    point_list
-}
-
-fn write_ply(file_name: &str, points_in: Vec<&Point>) {
-    let mut buf = std::fs::File::create(file_name).unwrap();
-
-    let mut ply = {
-        let mut ply = Ply::<DefaultElement>::new();
-        ply.header.encoding = Encoding::BinaryLittleEndian;
-        ply.header.comments.push("Ferris".to_string());
-
-        let mut point_element = ElementDef::new("point".to_string());
-        let p = PropertyDef::new("x".to_string(), PropertyType::Scalar(ScalarType::Float));
-        point_element.properties.add(p);
-        let p = PropertyDef::new("y".to_string(), PropertyType::Scalar(ScalarType::Float));
-        point_element.properties.add(p);
-        let p = PropertyDef::new("z".to_string(), PropertyType::Scalar(ScalarType::Float));
-        point_element.properties.add(p);
-        ply.header.elements.add(point_element);
-
-        let mut points = Vec::new();
-
-        for p in points_in {
-            let mut point = DefaultElement::new();
-            point.insert("x".to_string(), Property::Float(p.0));
-            point.insert("y".to_string(), Property::Float(p.1));
-            point.insert("z".to_string(), Property::Float(p.2));
-            points.push(point);
-        }
-
-        ply.payload.insert("point".to_string(), points);
-
-        ply.make_consistent().unwrap();
-        ply
-    };
-
-    let w = Writer::new();
-    let written = w.write_ply(&mut buf, &mut ply).unwrap();
-    println!("{} bytes written", written);
 }
 
 fn euclidean<T: num_traits::Float>(a: &[T], b: &[T]) -> T {
@@ -120,6 +57,40 @@ fn euclidean<T: num_traits::Float>(a: &[T], b: &[T]) -> T {
         .sqrt()
 }
 
+fn grow(node: Vec3, attractors: Vec<&Vec3>, step: f32) -> (Vec3, Vec3) {
+    let distances: Vec<Vec3> = attractors
+        .into_iter()
+        .map(|attractor| *attractor - node)
+        .collect();
+
+    let distances_norm: Vec<Vec3> = distances.iter().map(|v| v.normalize()).collect();
+
+    let distances_norm_sum: Vec3 = distances_norm
+        .iter()
+        .copied()
+        .reduce(|acc, v| Vec3(acc.0 + v.0, acc.1 + v.1, acc.2 + v.2))
+        .unwrap();
+
+    // println!("{:?}", distances_norm_sum);
+
+    let distances_norm_mean_norm = Vec3(
+        distances_norm_sum.0 / (distances_norm.len() as f32),
+        distances_norm_sum.1 / (distances_norm.len() as f32),
+        distances_norm_sum.2 / (distances_norm.len() as f32),
+    )
+    .normalize();
+    // println!("{:?}", distances_norm_mean_norm);
+
+    (
+        Vec3(
+            node.0 + distances_norm_mean_norm.0 * step,
+            node.1 + distances_norm_mean_norm.1 * step,
+            node.2 + distances_norm_mean_norm.2 * step,
+        ),
+        distances_norm_mean_norm,
+    )
+}
+
 fn main() {
     const ATTRACTION_DISTANCE: f32 = 0.3;
     const KILL_DISTANCE: f32 = 0.03;
@@ -128,7 +99,7 @@ fn main() {
 
     let args = Args::parse();
 
-    let mut attractors = read_ply(&args.file_in);
+    let mut attractors = ply_utils::read_ply(&args.file_in);
 
     // mother node (min Z)
     let nodes = attractors
@@ -170,9 +141,9 @@ fn main() {
         // println!("{:?}", node_attractors);
         if !node_attractors.is_empty() {
             // ! spawn thread
-            let node_attractors: Vec<&Point> =
+            let node_attractors: Vec<&Vec3> =
                 node_attractors.iter().map(|&i| &attractors[i]).collect();
-            write_ply(&args.file_out, node_attractors);
+            ply_utils::write_ply(&args.file_out, node_attractors);
         }
     }
 }
