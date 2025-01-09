@@ -8,8 +8,10 @@ mod ply_utils;
 use clap::Parser;
 use kdtree::KdTree;
 // use kdtree::ErrorKind;
+use rayon::prelude::*;
 use std::ops::Sub;
-use std::thread;
+
+// use std::time::Instant;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -107,7 +109,7 @@ fn get_nodes_attractors<'a>(
     attraction_distance: f32,
 ) -> Vec<Option<Vec<&'a Vec3>>> {
     let attractor_node: Vec<Option<u32>> = attractors
-        .iter()
+        .par_iter()
         .map(|a| {
             let nearest = nodes_tree.nearest(&a.to_array(), 1, &euclidean).unwrap();
             assert_eq!(nearest.len(), 1);
@@ -120,7 +122,7 @@ fn get_nodes_attractors<'a>(
         .collect();
 
     nodes
-        .iter()
+        .par_iter()
         .enumerate()
         .map(|(node_idx, _)| {
             attractor_node
@@ -141,8 +143,8 @@ fn get_nodes_attractors<'a>(
 fn main() {
     const ATTRACTION_DISTANCE: f32 = 0.02;
     const KILL_DISTANCE: f32 = 0.01;
-    const SEGMENT_LENGTH: f32 = 0.002;
-    const ITERATIONS: u32 = 150;
+    const SEGMENT_LENGTH: f32 = 0.004;
+    const ITERATIONS: u32 = 400;
     const ZERO: Vec3 = Vec3(0.0, 0.0, 0.0);
 
     let args = Args::parse();
@@ -168,7 +170,7 @@ fn main() {
 
     for iteration in 1..=ITERATIONS {
         println!(
-            "⌛ {} nodes {} attractors {}",
+            "🔄 {} -> nodes: {} attractors: {}",
             iteration,
             nodes.len(),
             attractors.len()
@@ -176,31 +178,25 @@ fn main() {
         let nodes_attractors =
             get_nodes_attractors(&kdtree, &nodes, &attractors, ATTRACTION_DISTANCE);
 
-        let mut thread_result = Vec::new();
+        let mut grow_result = Vec::new();
 
-        // Run grow() threaded
-        thread::scope(|s| {
-            let mut thread_handles = Vec::new();
-            for (i, node_attractors) in nodes_attractors.into_iter().enumerate() {
-                if let Some(growing_node_attractors) = node_attractors {
-                    let nodes_i = &nodes[i].point;
-                    let handle =
-                        s.spawn(move || grow(nodes_i, &growing_node_attractors, SEGMENT_LENGTH));
-                    thread_handles.push(handle);
-                }
+        for (i, node_attractors) in nodes_attractors.into_iter().enumerate() {
+            if let Some(growing_node_attractors) = node_attractors {
+                grow_result.push(grow(
+                    &nodes[i].point,
+                    &growing_node_attractors,
+                    SEGMENT_LENGTH,
+                ));
             }
-            for handle in thread_handles {
-                thread_result.push(handle.join().unwrap());
-            }
-        });
+        }
 
         // Append nodes
-        for (i, (new_node, _)) in thread_result.iter().enumerate() {
+        for (i, (new_node, _)) in grow_result.iter().enumerate() {
             kdtree
                 .add(new_node.to_array(), (nodes.len() + i) as u32)
                 .unwrap();
         }
-        let (new_points, parent_vectors): (Vec<_>, Vec<_>) = thread_result.into_iter().unzip();
+        let (new_points, parent_vectors): (Vec<_>, Vec<_>) = grow_result.into_iter().unzip();
         nodes.append(
             &mut new_points
                 .iter()
@@ -215,16 +211,21 @@ fn main() {
         );
 
         // Attractors are pruned as soon as any node enters its kill distance
-        let mut victims = Vec::new();
-        for (i, attractor) in attractors.iter().enumerate() {
-            let within = kdtree
-                .within(&attractor.to_array(), KILL_DISTANCE, &euclidean)
-                .unwrap();
-            if !within.is_empty() {
-                // println!("🔪 {:?}", within);
-                victims.push(i);
-            }
-        }
+        let victims: Vec<usize> = attractors
+            .par_iter()
+            .enumerate()
+            .filter_map(|(i, attractor)| {
+                let within = kdtree
+                    .within(&attractor.to_array(), KILL_DISTANCE, &euclidean)
+                    .unwrap();
+                if !within.is_empty() {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         for v in victims {
             attractors.swap_remove(v);
         }
