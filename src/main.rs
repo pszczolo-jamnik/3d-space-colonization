@@ -20,6 +20,8 @@ struct Args {
     file_in: String,
     #[arg(long)]
     file_out: String,
+    #[arg(long)]
+    iterations: u32,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -144,7 +146,6 @@ fn main() {
     const ATTRACTION_DISTANCE: f32 = 0.02;
     const KILL_DISTANCE: f32 = 0.01;
     const SEGMENT_LENGTH: f32 = 0.004;
-    const ITERATIONS: u32 = 400;
     const ZERO: Vec3 = Vec3(0.0, 0.0, 0.0);
 
     let args = Args::parse();
@@ -168,7 +169,7 @@ fn main() {
     let mut kdtree = KdTree::new(3);
     kdtree.add(nodes[0].point.to_array(), 0).unwrap();
 
-    for iteration in 1..=ITERATIONS {
+    for iteration in 1..=args.iterations {
         println!(
             "🔄 {} -> nodes: {} attractors: {}",
             iteration,
@@ -211,7 +212,7 @@ fn main() {
         );
 
         // Attractors are pruned as soon as any node enters its kill distance
-        let victims: Vec<usize> = attractors
+        let mut victims: Vec<usize> = attractors
             .par_iter()
             .enumerate()
             .filter_map(|(i, attractor)| {
@@ -226,8 +227,11 @@ fn main() {
             })
             .collect();
 
-        for v in victims {
-            attractors.swap_remove(v);
+        victims.sort_unstable();
+
+        // remove in descending order
+        for v in victims.iter().rev() {
+            attractors.swap_remove(*v);
         }
     }
     ply_utils::write_ply(&args.file_out, nodes.iter().map(|n| &n.point).collect());
