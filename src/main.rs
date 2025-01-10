@@ -10,8 +10,8 @@ use clap::Parser;
 use kdtree::KdTree;
 // use kdtree::ErrorKind;
 use rayon::prelude::*;
-use std::ops::Sub;
 use std::fs;
+use std::ops::Sub;
 
 // use std::time::Instant;
 
@@ -191,11 +191,7 @@ fn main() {
 
         for (i, node_attractors) in nodes_attractors.into_iter().enumerate() {
             if let Some(growing_node_attractors) = node_attractors {
-                let growing = grow(
-                    &nodes[i].point,
-                    &growing_node_attractors,
-                    SEGMENT_LENGTH,
-                );
+                let growing = grow(&nodes[i].point, &growing_node_attractors, SEGMENT_LENGTH);
                 // i is new node's parent
                 grow_result.push((i, growing));
             }
@@ -210,14 +206,12 @@ fn main() {
 
         let new_nodes: Vec<Node> = grow_result
             .iter()
-            .map(|(parent, (new_point, _))| {
-                Node {
-                    point: *new_point,
-                    vector: ZERO,
-                    thiccness: 0.0,
-                    age: iteration,
-                    parent: Some(*parent),
-                }
+            .map(|(parent, (new_point, _))| Node {
+                point: *new_point,
+                vector: ZERO,
+                thiccness: 0.0,
+                age: iteration,
+                parent: Some(*parent),
             })
             .collect();
 
@@ -254,9 +248,13 @@ fn main() {
     let nodes_last_gen: Vec<usize> = nodes
         .iter()
         .enumerate()
-        .filter_map(|(i, node)|
-            if node.age == args.iterations { Some(i) } else { None }
-        )
+        .filter_map(|(i, node)| {
+            if node.age == args.iterations {
+                Some(i)
+            } else {
+                None
+            }
+        })
         .collect();
 
     const THICCNESS_A: f32 = 0.01;
@@ -286,12 +284,14 @@ fn main() {
             format!("{}/{}.ply", args.dir_out, iteration).as_str(),
             nodes
                 .iter()
-                .map(|node| if node.age <= iteration {
-                    node
-                } else {
-                    &null_node
+                .map(|node| {
+                    if node.age <= iteration {
+                        node
+                    } else {
+                        &null_node
+                    }
                 })
-                .collect());
+                .collect(),
+        );
     }
-
 }

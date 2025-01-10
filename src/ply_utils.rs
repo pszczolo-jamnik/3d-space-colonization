@@ -7,7 +7,7 @@ use ply_rs_bw::ply::{
 };
 use ply_rs_bw::writer::Writer;
 
-use super::{Vec3, Node};
+use super::{Node, Vec3};
 
 impl ply::PropertyAccess for Vec3 {
     fn new() -> Self {
@@ -53,7 +53,9 @@ pub fn write_ply(file_name: &str, nodes_in: Vec<&Node>) {
     let mut ply = {
         let mut ply = Ply::<DefaultElement>::new();
         ply.header.encoding = Encoding::BinaryLittleEndian;
-        ply.header.comments.push("https://github.com/pszczolo-jamnik/3d-space-colonization".to_string());
+        ply.header
+            .comments
+            .push("https://github.com/pszczolo-jamnik/3d-space-colonization".to_string());
 
         let mut point_element = ElementDef::new("vertex".to_string());
         for name in ["x", "y", "z", "nx", "ny", "nz", "thiccness"] {
