@@ -7,7 +7,7 @@ use ply_rs_bw::ply::{
 };
 use ply_rs_bw::writer::Writer;
 
-use super::Vec3;
+use super::{Vec3, Node};
 
 impl ply::PropertyAccess for Vec3 {
     fn new() -> Self {
@@ -47,40 +47,42 @@ pub fn read_ply(file_name: &str) -> Vec<Vec3> {
     point_list
 }
 
-pub fn write_ply(file_name: &str, points_in: Vec<&Vec3>) {
+pub fn write_ply(file_name: &str, nodes_in: Vec<&Node>) {
     let mut buf = std::fs::File::create(file_name).unwrap();
 
     let mut ply = {
         let mut ply = Ply::<DefaultElement>::new();
         ply.header.encoding = Encoding::BinaryLittleEndian;
-        ply.header.comments.push("Ferris".to_string());
+        ply.header.comments.push("https://github.com/pszczolo-jamnik/3d-space-colonization".to_string());
 
-        let mut point_element = ElementDef::new("point".to_string());
-        let p = PropertyDef::new("x".to_string(), PropertyType::Scalar(ScalarType::Float));
-        point_element.properties.add(p);
-        let p = PropertyDef::new("y".to_string(), PropertyType::Scalar(ScalarType::Float));
-        point_element.properties.add(p);
-        let p = PropertyDef::new("z".to_string(), PropertyType::Scalar(ScalarType::Float));
-        point_element.properties.add(p);
+        let mut point_element = ElementDef::new("vertex".to_string());
+        for name in ["x", "y", "z", "nx", "ny", "nz", "thiccness"] {
+            let p = PropertyDef::new(name.to_string(), PropertyType::Scalar(ScalarType::Float));
+            point_element.properties.add(p);
+        }
         ply.header.elements.add(point_element);
 
         let mut points = Vec::new();
 
-        for p in points_in {
+        for node in nodes_in {
             let mut point = DefaultElement::new();
-            point.insert("x".to_string(), Property::Float(p.0));
-            point.insert("y".to_string(), Property::Float(p.1));
-            point.insert("z".to_string(), Property::Float(p.2));
+            point.insert("x".to_string(), Property::Float(node.point.0));
+            point.insert("y".to_string(), Property::Float(node.point.1));
+            point.insert("z".to_string(), Property::Float(node.point.2));
+            point.insert("nx".to_string(), Property::Float(node.vector.0));
+            point.insert("ny".to_string(), Property::Float(node.vector.1));
+            point.insert("nz".to_string(), Property::Float(node.vector.2));
+            point.insert("thiccness".to_string(), Property::Float(node.thiccness));
             points.push(point);
         }
 
-        ply.payload.insert("point".to_string(), points);
+        ply.payload.insert("vertex".to_string(), points);
 
         ply.make_consistent().unwrap();
         ply
     };
 
     let w = Writer::new();
-    let written = w.write_ply(&mut buf, &mut ply).unwrap();
-    println!("{} bytes written", written);
+    let _written = w.write_ply(&mut buf, &mut ply).unwrap();
+    // println!("{} bytes written", written);
 }

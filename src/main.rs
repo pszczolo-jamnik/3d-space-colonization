@@ -2,6 +2,7 @@ extern crate clap;
 extern crate kdtree;
 extern crate num_traits;
 extern crate ply_rs_bw;
+extern crate rayon;
 
 mod ply_utils;
 
@@ -10,6 +11,7 @@ use kdtree::KdTree;
 // use kdtree::ErrorKind;
 use rayon::prelude::*;
 use std::ops::Sub;
+use std::fs;
 
 // use std::time::Instant;
 
@@ -19,7 +21,7 @@ struct Args {
     #[arg(long)]
     file_in: String,
     #[arg(long)]
-    file_out: String,
+    dir_out: String,
     #[arg(long)]
     iterations: u32,
 }
@@ -33,6 +35,8 @@ struct Node {
     vector: Vec3,
     thiccness: f32,
     age: u32,
+    // ! -> &Node
+    parent: Option<usize>,
 }
 
 impl Vec3 {
@@ -70,6 +74,7 @@ fn euclidean<T: num_traits::Float>(a: &[T], b: &[T]) -> T {
         .sqrt()
 }
 
+/// Returns new point and vector for parent
 fn grow(node_pt: &Vec3, attractors: &Vec<&Vec3>, step: f32) -> (Vec3, Vec3) {
     let distances: Vec<Vec3> = attractors
         .iter()
@@ -150,6 +155,8 @@ fn main() {
 
     let args = Args::parse();
 
+    fs::create_dir(&args.dir_out).unwrap();
+
     let mut attractors = ply_utils::read_ply(&args.file_in);
 
     // mother node (min Z)
@@ -162,6 +169,7 @@ fn main() {
         vector: ZERO,
         thiccness: 0.001,
         age: 0,
+        parent: None,
     }];
 
     println!("🌱 {:?}", nodes);
@@ -183,33 +191,41 @@ fn main() {
 
         for (i, node_attractors) in nodes_attractors.into_iter().enumerate() {
             if let Some(growing_node_attractors) = node_attractors {
-                grow_result.push(grow(
+                let growing = grow(
                     &nodes[i].point,
                     &growing_node_attractors,
                     SEGMENT_LENGTH,
-                ));
+                );
+                // i is new node's parent
+                grow_result.push((i, growing));
             }
         }
 
         // Append nodes
-        for (i, (new_node, _)) in grow_result.iter().enumerate() {
+        for (i, (_, (new_node, _))) in grow_result.iter().enumerate() {
             kdtree
                 .add(new_node.to_array(), (nodes.len() + i) as u32)
                 .unwrap();
         }
-        let (new_points, parent_vectors): (Vec<_>, Vec<_>) = grow_result.into_iter().unzip();
-        nodes.append(
-            &mut new_points
-                .iter()
-                // !
-                .map(|p| Node {
-                    point: *p,
+
+        let new_nodes: Vec<Node> = grow_result
+            .iter()
+            .map(|(parent, (new_point, _))| {
+                Node {
+                    point: *new_point,
                     vector: ZERO,
                     thiccness: 0.0,
                     age: iteration,
-                })
-                .collect(),
-        );
+                    parent: Some(*parent),
+                }
+            })
+            .collect();
+
+        for (parent, (_, parent_vector)) in &grow_result {
+            nodes[*parent].vector = *parent_vector;
+        }
+
+        nodes.extend(new_nodes);
 
         // Attractors are pruned as soon as any node enters its kill distance
         let mut victims: Vec<usize> = attractors
@@ -234,6 +250,48 @@ fn main() {
             attractors.swap_remove(*v);
         }
     }
-    ply_utils::write_ply(&args.file_out, nodes.iter().map(|n| &n.point).collect());
-    // ply_utils::write_ply(&args.file_out, attractors.iter().collect());
+
+    let nodes_last_gen: Vec<usize> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, node)|
+            if node.age == args.iterations { Some(i) } else { None }
+        )
+        .collect();
+
+    const THICCNESS_A: f32 = 0.01;
+    const THICCNESS_B: f32 = 0.07;
+
+    // Experiment here
+    for node_i in nodes_last_gen {
+        let mut node_ref = &mut nodes[node_i];
+        node_ref.thiccness = 0.01;
+        while let Some(node_parent) = node_ref.parent {
+            let thiccness = node_ref.thiccness;
+            node_ref = &mut nodes[node_parent];
+            if node_ref.thiccness < (thiccness + THICCNESS_B) {
+                node_ref.thiccness = thiccness + THICCNESS_A;
+            }
+        }
+    }
+
+    let null_node = Node {
+        point: ZERO,
+        ..nodes[0]
+    };
+
+    // Each frame include only current and past generations
+    for iteration in 0..=args.iterations {
+        ply_utils::write_ply(
+            format!("{}/{}.ply", args.dir_out, iteration).as_str(),
+            nodes
+                .iter()
+                .map(|node| if node.age <= iteration {
+                    node
+                } else {
+                    &null_node
+                })
+                .collect());
+    }
+
 }
