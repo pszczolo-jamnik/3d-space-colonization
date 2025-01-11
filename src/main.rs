@@ -2,13 +2,15 @@ extern crate clap;
 extern crate kdtree;
 extern crate num_traits;
 extern crate ply_rs_bw;
+extern crate rand;
 extern crate rayon;
 
 mod ply_utils;
 
-use clap::Parser;
+use clap::{Args, Parser};
 use kdtree::KdTree;
 // use kdtree::ErrorKind;
+use rand::{thread_rng, Rng};
 use rayon::prelude::*;
 use std::fs;
 use std::ops::Sub;
@@ -17,13 +19,27 @@ use std::ops::Sub;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
-struct Args {
+struct Cli {
+    /// Input PLY file
     #[arg(long)]
     file_in: String,
     #[arg(long)]
     dir_out: String,
     #[arg(long)]
     iterations: u32,
+    #[command(flatten)]
+    origin: CliOrigin,
+}
+
+#[derive(Args, Debug)]
+#[group(required = true, multiple = false)]
+struct CliOrigin {
+    /// Start from N random points
+    #[arg(long, value_name = "N")]
+    origin_random: Option<u8>,
+    /// Start from minimum along (x | y | z)
+    #[arg(long, value_name = "AXIS")]
+    origin_min: Option<char>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -110,12 +126,12 @@ fn grow(node_pt: &Vec3, attractors: &Vec<&Vec3>, step: f32) -> (Vec3, Vec3) {
 /// within pre-defined attraction distance. Then, get all influencing
 /// attractors for each node
 fn get_nodes_attractors<'a>(
-    nodes_tree: &KdTree<f32, u32, [f32; 3]>,
+    nodes_tree: &KdTree<f32, usize, [f32; 3]>,
     nodes: &Vec<Node>,
     attractors: &'a Vec<Vec3>,
     attraction_distance: f32,
 ) -> Vec<Option<Vec<&'a Vec3>>> {
-    let attractor_node: Vec<Option<u32>> = attractors
+    let attractor_node: Vec<Option<usize>> = attractors
         .par_iter()
         .map(|a| {
             let nearest = nodes_tree.nearest(&a.to_array(), 1, &euclidean).unwrap();
@@ -150,32 +166,55 @@ fn get_nodes_attractors<'a>(
 fn main() {
     const ATTRACTION_DISTANCE: f32 = 0.02;
     const KILL_DISTANCE: f32 = 0.01;
-    const SEGMENT_LENGTH: f32 = 0.004;
+    const SEGMENT_LENGTH: f32 = 0.001;
     const ZERO: Vec3 = Vec3(0.0, 0.0, 0.0);
 
-    let args = Args::parse();
+    let args = Cli::parse();
 
     fs::create_dir(&args.dir_out).unwrap();
 
     let mut attractors = ply_utils::read_ply(&args.file_in);
+    let mut nodes = Vec::new();
+    let mut kdtree = KdTree::new(3);
 
-    // mother node (min Z)
-    let origin = attractors
-        .iter()
-        .min_by(|x, y| x.2.total_cmp(&y.2))
-        .unwrap();
-    let mut nodes = vec![Node {
-        point: *origin,
-        vector: ZERO,
-        thiccness: 0.001,
-        age: 0,
-        parent: None,
-    }];
+    // init nodes
+    if let Some(n) = args.origin.origin_random {
+        let mut rng = thread_rng();
+        for _ in 0..n {
+            let point = attractors[rng.gen_range(0..attractors.len())];
+            nodes.push(Node {
+                point,
+                vector: ZERO,
+                thiccness: 0.0,
+                age: 0,
+                parent: None,
+            });
+        }
+    } else {
+        let axis = args.origin.origin_min.unwrap();
+        let point = attractors
+            .iter()
+            .min_by(|x, y| match axis {
+                'x' => x.0.total_cmp(&y.0),
+                'y' => x.1.total_cmp(&y.1),
+                'z' => x.2.total_cmp(&y.2),
+                _ => panic!("wrong axis"),
+            })
+            .unwrap();
+        nodes.push(Node {
+            point: *point,
+            vector: ZERO,
+            thiccness: 0.0,
+            age: 0,
+            parent: None,
+        });
+    }
+
+    for (i, node) in nodes.iter().enumerate() {
+        kdtree.add(node.point.to_array(), i).unwrap();
+    }
 
     println!("🌱 {:?}", nodes);
-
-    let mut kdtree = KdTree::new(3);
-    kdtree.add(nodes[0].point.to_array(), 0).unwrap();
 
     for iteration in 1..=args.iterations {
         println!(
@@ -199,9 +238,7 @@ fn main() {
 
         // Append nodes
         for (i, (_, (new_node, _))) in grow_result.iter().enumerate() {
-            kdtree
-                .add(new_node.to_array(), (nodes.len() + i) as u32)
-                .unwrap();
+            kdtree.add(new_node.to_array(), nodes.len() + i).unwrap();
         }
 
         let new_nodes: Vec<Node> = grow_result
