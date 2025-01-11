@@ -58,7 +58,7 @@ pub fn write_ply(file_name: &str, nodes_in: Vec<&Node>) {
             .push("https://github.com/pszczolo-jamnik/3d-space-colonization".to_string());
 
         let mut point_element = ElementDef::new("vertex".to_string());
-        for name in ["x", "y", "z", "nx", "ny", "nz", "thiccness"] {
+        for name in ["x", "y", "z", "nx", "ny", "nz", "thiccness", "generation"] {
             let p = PropertyDef::new(name.to_string(), PropertyType::Scalar(ScalarType::Float));
             point_element.properties.add(p);
         }
@@ -75,6 +75,10 @@ pub fn write_ply(file_name: &str, nodes_in: Vec<&Node>) {
             point.insert("ny".to_string(), Property::Float(node.vector.1));
             point.insert("nz".to_string(), Property::Float(node.vector.2));
             point.insert("thiccness".to_string(), Property::Float(node.thiccness));
+            point.insert(
+                "generation".to_string(),
+                Property::Float(node.generation as f32),
+            );
             points.push(point);
         }
 

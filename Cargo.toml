@@ -10,3 +10,6 @@ num-traits = "0.2.19"
 ply-rs-bw = "2.0.1"
 rand = "0.8.5"
 rayon = "1.10.0"
+
+[profile.release]
+debug = true

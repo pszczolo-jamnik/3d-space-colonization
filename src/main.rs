@@ -12,7 +12,6 @@ use kdtree::KdTree;
 // use kdtree::ErrorKind;
 use rand::{thread_rng, Rng};
 use rayon::prelude::*;
-use std::fs;
 use std::ops::Sub;
 
 // use std::time::Instant;
@@ -23,8 +22,9 @@ struct Cli {
     /// Input PLY file
     #[arg(long)]
     file_in: String,
+    /// Output PLY file
     #[arg(long)]
-    dir_out: String,
+    file_out: String,
     #[arg(long)]
     iterations: u32,
     #[command(flatten)]
@@ -50,7 +50,7 @@ struct Node {
     point: Vec3,
     vector: Vec3,
     thiccness: f32,
-    age: u32,
+    generation: u32,
     // ! -> &Node
     parent: Option<usize>,
 }
@@ -153,7 +153,7 @@ fn get_nodes_attractors<'a>(
                 .enumerate()
                 .filter_map(|(attractor_idx, node_idx_)| match node_idx_ {
                     None => None,
-                    Some(i) if (*i as usize) == node_idx => Some(attractor_idx),
+                    Some(i) if *i == node_idx => Some(attractor_idx),
                     _ => None,
                 })
                 .map(|i| &attractors[i])
@@ -165,13 +165,11 @@ fn get_nodes_attractors<'a>(
 
 fn main() {
     const ATTRACTION_DISTANCE: f32 = 0.02;
-    const KILL_DISTANCE: f32 = 0.01;
-    const SEGMENT_LENGTH: f32 = 0.001;
+    const KILL_DISTANCE: f32 = 0.005;
+    const SEGMENT_LENGTH: f32 = 0.0015;
     const ZERO: Vec3 = Vec3(0.0, 0.0, 0.0);
 
     let args = Cli::parse();
-
-    fs::create_dir(&args.dir_out).unwrap();
 
     let mut attractors = ply_utils::read_ply(&args.file_in);
     let mut nodes = Vec::new();
@@ -186,7 +184,7 @@ fn main() {
                 point,
                 vector: ZERO,
                 thiccness: 0.0,
-                age: 0,
+                generation: 0,
                 parent: None,
             });
         }
@@ -205,7 +203,7 @@ fn main() {
             point: *point,
             vector: ZERO,
             thiccness: 0.0,
-            age: 0,
+            generation: 0,
             parent: None,
         });
     }
@@ -247,7 +245,7 @@ fn main() {
                 point: *new_point,
                 vector: ZERO,
                 thiccness: 0.0,
-                age: iteration,
+                generation: iteration,
                 parent: Some(*parent),
             })
             .collect();
@@ -286,7 +284,7 @@ fn main() {
         .iter()
         .enumerate()
         .filter_map(|(i, node)| {
-            if node.age == args.iterations {
+            if node.generation == args.iterations {
                 Some(i)
             } else {
                 None
@@ -310,25 +308,5 @@ fn main() {
         }
     }
 
-    let null_node = Node {
-        point: ZERO,
-        ..nodes[0]
-    };
-
-    // Each frame include only current and past generations
-    for iteration in 0..=args.iterations {
-        ply_utils::write_ply(
-            format!("{}/{}.ply", args.dir_out, iteration).as_str(),
-            nodes
-                .iter()
-                .map(|node| {
-                    if node.age <= iteration {
-                        node
-                    } else {
-                        &null_node
-                    }
-                })
-                .collect(),
-        );
-    }
+    ply_utils::write_ply(&args.file_out, nodes.iter().collect());
 }
