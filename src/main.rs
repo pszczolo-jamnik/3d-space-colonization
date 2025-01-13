@@ -171,15 +171,19 @@ fn main() {
 
     let args = Cli::parse();
 
-    let mut attractors = ply_utils::read_ply(&args.file_in);
+    let mut attractors: Vec<Option<Vec3>> = ply_utils::read_ply(&args.file_in)
+        .iter()
+        .map(|a| Some(*a))
+        .collect();
     let mut nodes = Vec::new();
-    let mut kdtree = KdTree::new(3);
+    let mut kdtree_n = KdTree::new(3);
+    let mut kdtree_a = KdTree::new(3);
 
     // init nodes
     if let Some(n) = args.origin.origin_random {
         let mut rng = thread_rng();
         for _ in 0..n {
-            let point = attractors[rng.gen_range(0..attractors.len())];
+            let point = attractors[rng.gen_range(0..attractors.len())].unwrap();
             nodes.push(Node {
                 point,
                 vector: ZERO,
@@ -192,6 +196,10 @@ fn main() {
         let axis = args.origin.origin_min.unwrap();
         let point = attractors
             .iter()
+            .map(|a| match a {
+                Some(p) => p,
+                None => unreachable!(),
+            })
             .min_by(|x, y| match axis {
                 'x' => x.0.total_cmp(&y.0),
                 'y' => x.1.total_cmp(&y.1),
@@ -209,20 +217,47 @@ fn main() {
     }
 
     for (i, node) in nodes.iter().enumerate() {
-        kdtree.add(node.point.to_array(), i).unwrap();
+        kdtree_n.add(node.point.to_array(), i).unwrap();
+    }
+
+    // init attractors
+    for (i, attractor) in attractors.iter().enumerate() {
+        if let Some(point) = attractor {
+            kdtree_a.add(point.to_array(), i).unwrap();
+        } else {
+            unreachable!();
+        }
     }
 
     println!("🌱 {:?}", nodes);
 
     for iteration in 1..=args.iterations {
-        println!(
-            "🔄 {} -> nodes: {} attractors: {}",
-            iteration,
-            nodes.len(),
-            attractors.len()
-        );
+        println!("🔄 {} -> nodes: {}", iteration, nodes.len(),);
+
+        let mut attractors_within: Vec<usize> = nodes
+            .par_iter()
+            .map(|node| {
+                let (_, i): (Vec<_>, Vec<&usize>) = kdtree_a
+                    .within(&node.point.to_array(), ATTRACTION_DISTANCE, &euclidean)
+                    .unwrap()
+                    .into_iter()
+                    .unzip();
+                i
+            })
+            .flatten()
+            .map(|i| *i)
+            .collect();
+
+        attractors_within.sort_unstable();
+        attractors_within.dedup();
+
+        let attractors_within: Vec<Vec3> = attractors_within
+            .par_iter()
+            .filter_map(|i| attractors[*i])
+            .collect();
+
         let nodes_attractors =
-            get_nodes_attractors(&kdtree, &nodes, &attractors, ATTRACTION_DISTANCE);
+            get_nodes_attractors(&kdtree_n, &nodes, &attractors_within, ATTRACTION_DISTANCE);
 
         let mut grow_result = Vec::new();
 
@@ -236,7 +271,7 @@ fn main() {
 
         // Append nodes
         for (i, (_, (new_node, _))) in grow_result.iter().enumerate() {
-            kdtree.add(new_node.to_array(), nodes.len() + i).unwrap();
+            kdtree_n.add(new_node.to_array(), nodes.len() + i).unwrap();
         }
 
         let new_nodes: Vec<Node> = grow_result
@@ -257,26 +292,27 @@ fn main() {
         nodes.extend(new_nodes);
 
         // Attractors are pruned as soon as any node enters its kill distance
-        let mut victims: Vec<usize> = attractors
+        let victims: Vec<usize> = attractors
             .par_iter()
             .enumerate()
             .filter_map(|(i, attractor)| {
-                let within = kdtree
-                    .within(&attractor.to_array(), KILL_DISTANCE, &euclidean)
-                    .unwrap();
-                if !within.is_empty() {
-                    Some(i)
+                if let Some(a) = attractor {
+                    let within = kdtree_n
+                        .within(&a.to_array(), KILL_DISTANCE, &euclidean)
+                        .unwrap();
+                    if !within.is_empty() {
+                        Some(i)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
             })
             .collect();
 
-        victims.sort_unstable();
-
-        // remove in descending order
-        for v in victims.iter().rev() {
-            attractors.swap_remove(*v);
+        for v in victims.iter() {
+            attractors[*v] = None;
         }
     }
 
