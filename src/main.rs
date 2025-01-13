@@ -234,8 +234,16 @@ fn main() {
     for iteration in 1..=args.iterations {
         println!("🔄 {} -> nodes: {}", iteration, nodes.len(),);
 
+        const GEN_BEFORE: u32 = 5;
         let mut attractors_within: Vec<usize> = nodes
             .par_iter()
+            .filter_map(|node| {
+                if (node.generation >= iteration - GEN_BEFORE) || iteration < GEN_BEFORE {
+                    Some(node)
+                } else {
+                    None
+                }
+            })
             .map(|node| {
                 let (_, i): (Vec<_>, Vec<&usize>) = kdtree_a
                     .within(&node.point.to_array(), ATTRACTION_DISTANCE, &euclidean)
