@@ -53,6 +53,7 @@ struct Node {
     generation: u32,
     // ! -> &Node
     parent: Option<usize>,
+    children: u8,
 }
 
 impl Vec3 {
@@ -147,17 +148,21 @@ fn get_nodes_attractors<'a>(
     nodes
         .par_iter()
         .enumerate()
-        .map(|(node_idx, _)| {
-            attractor_node
-                .iter()
-                .enumerate()
-                .filter_map(|(attractor_idx, node_idx_)| match node_idx_ {
-                    None => None,
-                    Some(i) if *i == node_idx => Some(attractor_idx),
-                    _ => None,
-                })
-                .map(|i| &attractors[i])
-                .collect()
+        .map(|(node_idx, node)| {
+            if node.children < 5 {
+                attractor_node
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(attractor_idx, node_idx_)| match node_idx_ {
+                        None => None,
+                        Some(i) if *i == node_idx => Some(attractor_idx),
+                        _ => None,
+                    })
+                    .map(|i| &attractors[i])
+                    .collect()
+            } else {
+                vec![]
+            }
         })
         .map(|v: Vec<&Vec3>| if v.is_empty() { None } else { Some(v) })
         .collect()
@@ -190,6 +195,7 @@ fn main() {
                 thiccness: 0.0,
                 generation: 0,
                 parent: None,
+                children: 0,
             });
         }
     } else {
@@ -213,6 +219,7 @@ fn main() {
             thiccness: 0.0,
             generation: 0,
             parent: None,
+            children: 0,
         });
     }
 
@@ -267,6 +274,8 @@ fn main() {
         let nodes_attractors =
             get_nodes_attractors(&kdtree_n, &nodes, &attractors_within, ATTRACTION_DISTANCE);
 
+        assert_eq!(nodes.len(), nodes_attractors.len());
+
         let mut grow_result = Vec::new();
 
         for (i, node_attractors) in nodes_attractors.into_iter().enumerate() {
@@ -290,11 +299,13 @@ fn main() {
                 thiccness: 0.0,
                 generation: iteration,
                 parent: Some(*parent),
+                children: 0,
             })
             .collect();
 
         for (parent, (_, parent_vector)) in &grow_result {
             nodes[*parent].vector = *parent_vector;
+            nodes[*parent].children += 1;
         }
 
         nodes.extend(new_nodes);
