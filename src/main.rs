@@ -72,6 +72,10 @@ impl Vec3 {
             x => Self(self.0 / x, self.1 / x, self.2 / x),
         }
     }
+
+    fn is_finite(&self) -> bool {
+        self.0.is_finite() && self.1.is_finite() && self.2.is_finite()
+    }
 }
 
 impl Sub for Vec3 {
@@ -178,6 +182,12 @@ fn main() {
 
     let mut attractors: Vec<Option<Vec3>> = ply_utils::read_ply(&args.file_in)
         .iter()
+        .inspect(|a| {
+            if !a.is_finite() {
+                println!("⚠️ input contains NaN of inf values");
+            }
+        })
+        .filter(|a| a.is_finite())
         .map(|a| Some(*a))
         .collect();
     let mut nodes = Vec::new();
