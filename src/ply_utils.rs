@@ -38,7 +38,7 @@ pub fn read_ply(file_name: &str) -> Vec<Vec3> {
         match element.name.as_ref() {
             "vertex" => {
                 point_list = point_parser
-                    .read_payload_for_element(&mut f, &element, &header)
+                    .read_payload_for_element(&mut f, element, &header)
                     .unwrap();
             }
             _ => panic!("Unexpected element!"),
@@ -65,7 +65,7 @@ pub fn write_ply(file_name: &str, nodes_in: Vec<&Node>) {
             "nx",
             "ny",
             "nz",
-            "thiccness",
+            "thickness",
             "generation",
             "children",
         ] {
@@ -84,7 +84,7 @@ pub fn write_ply(file_name: &str, nodes_in: Vec<&Node>) {
             point.insert("nx".to_string(), Property::Float(node.vector.0));
             point.insert("ny".to_string(), Property::Float(node.vector.1));
             point.insert("nz".to_string(), Property::Float(node.vector.2));
-            point.insert("thiccness".to_string(), Property::Float(node.thiccness));
+            point.insert("thickness".to_string(), Property::Float(node.thickness));
             point.insert(
                 "generation".to_string(),
                 Property::Float(node.generation as f32),

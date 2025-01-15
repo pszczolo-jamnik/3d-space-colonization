@@ -62,7 +62,7 @@ struct Vec3(f32, f32, f32);
 struct Node {
     point: Vec3,
     vector: Vec3,
-    thiccness: f32,
+    thickness: f32,
     generation: u32,
     // ! -> &Node
     parent: Option<usize>,
@@ -228,7 +228,7 @@ fn main() {
             nodes.push(Node {
                 point,
                 vector: ZERO,
-                thiccness: 0.0,
+                thickness: 0.0,
                 generation: 0,
                 parent: None,
                 children: 0,
@@ -252,7 +252,7 @@ fn main() {
         nodes.push(Node {
             point: *point,
             vector: ZERO,
-            thiccness: 0.0,
+            thickness: 0.0,
             generation: 0,
             parent: None,
             children: 0,
@@ -344,7 +344,7 @@ fn main() {
             .map(|(parent, (new_point, _))| Node {
                 point: *new_point,
                 vector: ZERO,
-                thiccness: 0.0,
+                thickness: 0.0,
                 generation: iteration,
                 parent: Some(*parent),
                 children: 0,
@@ -395,18 +395,18 @@ fn main() {
         })
         .collect();
 
-    const THICCNESS_A: f32 = 0.01;
-    const THICCNESS_B: f32 = 0.05;
+    const THICKNESS_A: f32 = 0.01;
+    const THICKNESS_B: f32 = 0.05;
 
     // Experiment here
     for node_i in nodes_last_gen {
         let mut node_ref = &mut nodes[node_i];
-        node_ref.thiccness = 0.01;
+        node_ref.thickness = 0.01;
         while let Some(node_parent) = node_ref.parent {
-            let thiccness = node_ref.thiccness;
+            let thickness = node_ref.thickness;
             node_ref = &mut nodes[node_parent];
-            if node_ref.thiccness < (thiccness + THICCNESS_B) {
-                node_ref.thiccness = thiccness + THICCNESS_A;
+            if node_ref.thickness < (thickness + THICKNESS_B) {
+                node_ref.thickness = thickness + THICKNESS_A;
             }
         }
     }
