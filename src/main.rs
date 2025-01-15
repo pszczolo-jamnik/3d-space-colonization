@@ -9,12 +9,9 @@ mod ply_utils;
 
 use clap::{Args, Parser};
 use kdtree::KdTree;
-// use kdtree::ErrorKind;
-use rand::{thread_rng, Rng};
+use rand::prelude::*;
 use rayon::prelude::*;
 use std::ops::Sub;
-
-// use std::time::Instant;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -27,8 +24,24 @@ struct Cli {
     file_out: String,
     #[arg(long)]
     iterations: u32,
+    /// Only nodes within this distance around an attractor can be associated
+    /// with that attractor. Large attraction distances mean smoother and more
+    /// subtle branch curves, but at a performance cost
+    #[arg(long)]
+    attraction_distance: f32,
+    /// An attractor may be removed if one or more nodes are within
+    /// this distance around it
+    #[arg(long)]
+    kill_distance: f32,
+    /// The distance between nodes as the network grows. Larger values
+    /// mean better performance, but choppier and sharper branch curves
+    #[arg(long)]
+    segment_length: f32,
     #[command(flatten)]
     origin: CliOrigin,
+    /// Randomize growth 0.1 - 1.0
+    #[arg(long, value_name = "R")]
+    random: Option<f32>,
 }
 
 #[derive(Args, Debug)]
@@ -57,7 +70,7 @@ struct Node {
 }
 
 impl Vec3 {
-    fn to_array(&self) -> [f32; 3] {
+    fn to_array(self) -> [f32; 3] {
         [self.0, self.1, self.2]
     }
 
@@ -96,7 +109,13 @@ fn euclidean<T: num_traits::Float>(a: &[T], b: &[T]) -> T {
 }
 
 /// Returns new point and vector for parent
-fn grow(node_pt: &Vec3, attractors: &Vec<&Vec3>, step: f32) -> (Vec3, Vec3) {
+fn grow(
+    node_pt: &Vec3,
+    attractors: &Vec<&Vec3>,
+    step: f32,
+    random: Option<f32>,
+    rng: &mut ThreadRng,
+) -> (Vec3, Vec3) {
     let distances: Vec<Vec3> = attractors
         .iter()
         .map(|attractor| **attractor - *node_pt)
@@ -117,11 +136,21 @@ fn grow(node_pt: &Vec3, attractors: &Vec<&Vec3>, step: f32) -> (Vec3, Vec3) {
     )
     .normalize();
 
+    let (rx, ry, rz): (f32, f32, f32) = if let Some(r) = random {
+        (
+            rng.gen_range(0.0..r),
+            rng.gen_range(0.0..r),
+            rng.gen_range(0.0..r),
+        )
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
     (
         Vec3(
-            node_pt.0 + distances_norm_mean_norm.0 * step,
-            node_pt.1 + distances_norm_mean_norm.1 * step,
-            node_pt.2 + distances_norm_mean_norm.2 * step,
+            node_pt.0 + (distances_norm_mean_norm.0 + rx) * step,
+            node_pt.1 + (distances_norm_mean_norm.1 + ry) * step,
+            node_pt.2 + (distances_norm_mean_norm.2 + rz) * step,
         ),
         distances_norm_mean_norm,
     )
@@ -173,9 +202,6 @@ fn get_nodes_attractors<'a>(
 }
 
 fn main() {
-    const ATTRACTION_DISTANCE: f32 = 0.02;
-    const KILL_DISTANCE: f32 = 0.005;
-    const SEGMENT_LENGTH: f32 = 0.0015;
     const ZERO: Vec3 = Vec3(0.0, 0.0, 0.0);
 
     let args = Cli::parse();
@@ -246,6 +272,8 @@ fn main() {
         }
     }
 
+    let mut rng = thread_rng();
+
     println!("🌱 {:?}", nodes);
 
     for iteration in 1..=args.iterations {
@@ -263,7 +291,7 @@ fn main() {
             })
             .map(|node| {
                 let (_, i): (Vec<_>, Vec<&usize>) = kdtree_a
-                    .within(&node.point.to_array(), ATTRACTION_DISTANCE, &euclidean)
+                    .within(&node.point.to_array(), args.attraction_distance, &euclidean)
                     .unwrap()
                     .into_iter()
                     .unzip();
@@ -281,8 +309,12 @@ fn main() {
             .filter_map(|i| attractors[*i])
             .collect();
 
-        let nodes_attractors =
-            get_nodes_attractors(&kdtree_n, &nodes, &attractors_within, ATTRACTION_DISTANCE);
+        let nodes_attractors = get_nodes_attractors(
+            &kdtree_n,
+            &nodes,
+            &attractors_within,
+            args.attraction_distance,
+        );
 
         assert_eq!(nodes.len(), nodes_attractors.len());
 
@@ -290,7 +322,13 @@ fn main() {
 
         for (i, node_attractors) in nodes_attractors.into_iter().enumerate() {
             if let Some(growing_node_attractors) = node_attractors {
-                let growing = grow(&nodes[i].point, &growing_node_attractors, SEGMENT_LENGTH);
+                let growing = grow(
+                    &nodes[i].point,
+                    &growing_node_attractors,
+                    args.segment_length,
+                    args.random,
+                    &mut rng,
+                );
                 // i is new node's parent
                 grow_result.push((i, growing));
             }
@@ -327,7 +365,7 @@ fn main() {
             .filter_map(|(i, attractor)| {
                 if let Some(a) = attractor {
                     let within = kdtree_n
-                        .within(&a.to_array(), KILL_DISTANCE, &euclidean)
+                        .within(&a.to_array(), args.kill_distance, &euclidean)
                         .unwrap();
                     if !within.is_empty() {
                         Some(i)
@@ -358,7 +396,7 @@ fn main() {
         .collect();
 
     const THICCNESS_A: f32 = 0.01;
-    const THICCNESS_B: f32 = 0.07;
+    const THICCNESS_B: f32 = 0.05;
 
     // Experiment here
     for node_i in nodes_last_gen {
